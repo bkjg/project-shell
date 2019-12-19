@@ -119,7 +119,7 @@ noreturn void external_command(char **argv) {
       command = strndup(path, pos);
       strapp(&command, "/");
       strapp(&command, argv[0]);
-      execve(command, argv, environ);
+      (void) execve(command, argv, environ);
       path += (pos + 1);
       free(command);
     }

@@ -2,7 +2,6 @@
 #include <readline/history.h>
 
 //#define DEBUG 0
-#define BACKGROUND 1
 #include "shell.h"
 
 sigset_t sigchld_mask;
@@ -44,12 +43,15 @@ static int do_redir(token_t *token, int ntokens, int *inputp, int *outputp) {
       assert(i + 1 < ntokens);
       if (token[i] == T_INPUT) {
         *inputp = open(token[i + 1], O_RDONLY, 0);
+        token[i + 1] = T_NULL;
         assert(*inputp >= 0); 
       } else if (token[i] == T_OUTPUT) {
-        *outputp = open(token[i + 1], O_CREAT | O_WRONLY, 0666);
+        *outputp = open(token[i + 1], O_CREAT | O_WRONLY | O_TRUNC, 0666);
+        token[i + 1] = T_NULL;
         assert(*outputp >= 0); 
       } else if (token[i] == T_APPEND) {
         *outputp = open(token[i + 1], O_CREAT | O_WRONLY | O_APPEND, 0666);
+        token[i + 1] = T_NULL;
         assert(*outputp >= 0); 
       } else {
         /* BANG operator */
@@ -93,6 +95,17 @@ static int do_job(token_t *token, int ntokens, bool bg) {
   if (pid == 0) {  
     Sigprocmask(SIG_SETMASK, &mask, NULL);
     Setpgid(getpid(), getpid());
+
+    if (input != -1) {
+      Dup2(input, STDIN_FILENO);
+      close(input);
+    }
+
+    if (output != -1) {
+      Dup2(output, STDOUT_FILENO);
+      close(output);
+    }
+
     external_command(token);
   }
 
@@ -128,8 +141,19 @@ static pid_t do_stage(pid_t pgid, sigset_t *mask, int input, int output,
   printf("SHELL: do_stage\n");
 #endif
   /* TODO: Start a subprocess and make sure it's moved to a process group. */
-  pid_t pid;
+  pid_t pid = Fork();
 
+  if (pid == 0) {
+    Sigprocmask(SIG_SETMASK, mask, NULL);
+    Setpgid(getpid(), pgid);
+    if (builtin_command(token) >= 0) {
+      exit(EXIT_SUCCESS);
+    }
+
+    external_command(token);
+  }
+
+  Sigprocmask(SIG_SETMASK, mask, NULL);
   return pid;
 }
 
@@ -158,8 +182,15 @@ static int do_pipeline(token_t *token, int ntokens, bool bg) {
 
   /* TODO: Start pipeline subprocesses, create a job and monitor it.
    * Remember to close unused pipe ends! */
+  pid = Fork();
 
-
+  if (pid == 0) {
+    Sigprocmask(SIG_SETMASK, &mask, NULL);
+    pgid = getpid();
+    Setpgid(getpid(), pgid);
+    pid_t pid1 = do_stage(pgid, &mask, &input, &output, token, ntokens);
+    pid_t pid2 = do_stage(pgid, &mask, &input, &output, token, ntokens);
+  }
 
   Sigprocmask(SIG_SETMASK, &mask, NULL);
   return exitcode;
