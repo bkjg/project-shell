@@ -22,8 +22,12 @@ static int do_redir(token_t *token, int ntokens, int *inputp, int *outputp) {
 #endif
   for (int i = 0; i < ntokens; i++) {
     /* TODO: Handle tokens and open files as requested. */
+<<<<<<< HEAD
     mode = token[i];
     if (separator_p(mode)) {
+=======
+    if (separator_p(token[i])) {
+>>>>>>> b5eb13d... Add implementation of pipeline
       token[n] = token[i];
       n++;
     } else if (string_p(mode)) {
@@ -104,7 +108,19 @@ static int do_job(token_t *token, int ntokens, bool bg) {
   addproc(j, pid, token);
 
   if (!bg) {
+<<<<<<< HEAD
     exitcode = monitorjob(&mask);
+=======
+    while (true) {
+      monitorjob(&mask);
+      (void) jobstate(j, &exitcode);
+      if (exitcode < 0) {
+        Sigsuspend(&mask);
+      } else {
+        break;
+      }
+    }
+>>>>>>> b5eb13d... Add implementation of pipeline
   }
 
   Sigprocmask(SIG_SETMASK, &mask, NULL);
@@ -127,22 +143,14 @@ static pid_t do_stage(pid_t pgid, sigset_t *mask, int input, int output,
     Setpgid(getpid(), pgid);
 
     if (input != -1) {
-      char buf[1000];
-      //printf("INPUT\n");
       Dup2(input, STDIN_FILENO);
-
       close(input);
-
-      /*Read(STDIN_FILENO, buf, 1000);
-      printf("%s\n", buf);*/
     }
 
-    
     if (output != -1) {
       Dup2(output, STDOUT_FILENO);
       close(output);
     }
-
 
     if (builtin_command(token) >= 0) {
       exit(EXIT_SUCCESS);
@@ -151,8 +159,6 @@ static pid_t do_stage(pid_t pgid, sigset_t *mask, int input, int output,
     external_command(token);
   }
 
-  printf("unblock sigchld\n");
-  //Sigprocmask(SIG_SETMASK, mask, NULL);
   return pid;
 }
 
