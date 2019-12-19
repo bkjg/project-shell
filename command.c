@@ -108,7 +108,7 @@ int builtin_command(char **argv) {
 
 noreturn void external_command(char **argv) {
   const char *path = getenv("PATH");
-#ifdef DEBUG 0
+#ifdef DEBUG
   printf("COMMAND: external_command\n");
 #endif
   if (!index(argv[0], '/') && path) {

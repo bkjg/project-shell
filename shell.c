@@ -23,17 +23,6 @@ static int do_redir(token_t *token, int ntokens, int *inputp, int *outputp) {
   for (int i = 0; i < ntokens; i++) {
     /* TODO: Handle tokens and open files as requested. */
     if (separator_p(token[i])) {
-      if (token[i] == T_AND) {
-
-      } else if (token[i] == T_OR) {
-
-      } else if (token[i] == T_PIPE) {
-
-      } else if (token[i] == T_BGJOB) {
-
-      } else if (token[i] == T_COLON) {
-
-      }
       token[n] = token[i];
       n++;
     } else if (string_p(token[i])) {
@@ -43,15 +32,15 @@ static int do_redir(token_t *token, int ntokens, int *inputp, int *outputp) {
       assert(i + 1 < ntokens);
       if (token[i] == T_INPUT) {
         *inputp = open(token[i + 1], O_RDONLY, 0);
-        token[i + 1] = T_NULL;
+        i++;
         assert(*inputp >= 0); 
       } else if (token[i] == T_OUTPUT) {
         *outputp = open(token[i + 1], O_CREAT | O_WRONLY | O_TRUNC, 0666);
-        token[i + 1] = T_NULL;
+        i++;
         assert(*outputp >= 0); 
       } else if (token[i] == T_APPEND) {
         *outputp = open(token[i + 1], O_CREAT | O_WRONLY | O_APPEND, 0666);
-        token[i + 1] = T_NULL;
+        i++;
         assert(*outputp >= 0); 
       } else {
         /* BANG operator */
@@ -119,7 +108,6 @@ static int do_job(token_t *token, int ntokens, bool bg) {
     while (true) {
       monitorjob(&mask);
       (void) jobstate(j, &exitcode);
-      printf("State %d\n", exitcode);
       if (exitcode < 0) {
         Sigsuspend(&mask);
       } else {
@@ -146,6 +134,19 @@ static pid_t do_stage(pid_t pgid, sigset_t *mask, int input, int output,
   if (pid == 0) {
     Sigprocmask(SIG_SETMASK, mask, NULL);
     Setpgid(getpid(), pgid);
+
+    if (input != -1) {
+      printf("IIINPUUUUT\n");
+      Dup2(input, STDIN_FILENO);
+      //close(input);
+    }
+
+    if (output != -1) {
+      printf("OOOUTTTPUUUUT\n");
+      Dup2(output, STDOUT_FILENO);
+      close(output);
+    }
+
     if (builtin_command(token) >= 0) {
       exit(EXIT_SUCCESS);
     }
@@ -167,7 +168,7 @@ static void mkpipe(int *readp, int *writep) {
 /* Pipeline execution creates a multiprocess job. Both internal and external
  * commands are executed in subprocesses. */
 static int do_pipeline(token_t *token, int ntokens, bool bg) {
-#ifdef DEBUG 0
+#ifdef DEBUG
   printf("SHELL: do_pipeline\n");
 #endif
   pid_t pid, pgid = 0;
@@ -183,13 +184,44 @@ static int do_pipeline(token_t *token, int ntokens, bool bg) {
   /* TODO: Start pipeline subprocesses, create a job and monitor it.
    * Remember to close unused pipe ends! */
   pid = Fork();
-
+  
+  pid_t pid1, pid2;
   if (pid == 0) {
     Sigprocmask(SIG_SETMASK, &mask, NULL);
     pgid = getpid();
     Setpgid(getpid(), pgid);
-    pid_t pid1 = do_stage(pgid, &mask, &input, &output, token, ntokens);
-    pid_t pid2 = do_stage(pgid, &mask, &input, &output, token, ntokens);
+
+    size_t size; 
+    for (int i = 0; i < ntokens; ++i) {
+      if (token[i] == T_PIPE) {
+        token[i] = T_NULL;
+        size = i;
+        break;
+      }
+    }
+    pid1 = do_stage(pgid, &mask, input, output, token, size);
+    int j = addjob(pgid, bg);
+    addproc(j, pid1, token);
+
+    Waitpid(pid1, NULL, NULL);
+    //char buf[100];
+    //Read(next_input, buf, 100);
+    //printf("%s\n", buf);
+    //printf("%s\n", token[ntokens - 1]);
+    pid2 = do_stage(pgid, &mask, next_input, input, token + size + 1, ntokens - size - 1);
+    //printf("size2 = %d", ntokens - size - 1);
+    addproc(j, pid2, token + size + 1);
+    if (!bg) {
+      while (true) {
+        monitorjob(&mask);
+        (void) jobstate(j, &exitcode);
+        if (exitcode < 0) {
+          Sigsuspend(&mask);
+        } else {
+          break;
+        }
+      }
+    }
   }
 
   Sigprocmask(SIG_SETMASK, &mask, NULL);

@@ -28,23 +28,26 @@ static proc_t* findPid(job_t job, pid_t pid) {
   return NULL;
 }
 
-static int jobStatusChanged(job_t job) {
-  for (int i = 1; i < job.nproc; ++i) {
-    if (job.proc[i].state != job.proc[i - 1].state) {
-      return 0;
+static int job_state(job_t job) {
+  int state = FINISHED;
+  for (int i = 0; i < job.nproc; ++i) {
+    if (job.proc[i].state == RUNNING) {
+      return RUNNING;
+    } else if (job.proc[i].state == STOPPED) {
+      state = STOPPED;
     }
   }
 
-  return 1;
+  return state;
 }
 
 static void sigchld_handler(int sig) {
   int old_errno = errno;
   pid_t pid;
   int status;
-//#ifdef DEBUG
+#ifdef DEBUG
   printf("JOBS: sigchld_handler - TODO (implemented)\n");
-//#endif
+#endif
   /* TODO: Change state (FINISHED, RUNNING, STOPPED) of processes and jobs.
    * Bury all children that finished saving their status in jobs. */
   while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED)) > 0) {
@@ -61,9 +64,7 @@ static void sigchld_handler(int sig) {
           proc->state = RUNNING;
         }
 
-        if (jobStatusChanged(jobs[i])) {
-          jobs[i].state = jobs[i].proc[0].state;
-        }
+        jobs[i].state = job_state(jobs[i]);
 
         break;
       }
