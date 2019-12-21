@@ -1,5 +1,7 @@
 #include "shell.h"
 
+//#define DEBUG 0
+
 typedef struct proc {
   pid_t pid;    /* process identifier */
   int state;    /* RUNNING or STOPPED or FINISHED */
@@ -48,9 +50,10 @@ static void sigchld_handler(int sig) {
 #ifdef DEBUG
   printf("JOBS: sigchld_handler - TODO (implemented)\n");
 #endif
-  /* TODO: Change state (FINISHED, RUNNING, STOPPED) of processes and jobs.
+  /* TODO: Chan ge state (FINISHED, RUNNING, STOPPED) of processes and jobs.
    * Bury all children that finished saving their status in jobs. */
   while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED)) > 0) {
+    printf("pid = %d\n", pid);
     for (int i = 0; i < njobmax; ++i) {
       if (jobs[i].pgid != 0) {
         proc_t *proc = findPid(jobs[i], pid);
@@ -71,6 +74,8 @@ static void sigchld_handler(int sig) {
     }
   }
 
+  //printf("End of sigchild\n");
+  watchjobs(ALL);
   errno = old_errno;
 }
 
@@ -161,7 +166,6 @@ void addproc(int j, pid_t pid, char **argv) {
   job_t *job = &jobs[j];
 #ifdef DEBUG
   printf("JOBS: addproc (implemented)\n");
-  printf("addproc - j: %d\n", j);
 #endif
 
   int p = allocproc(j);
@@ -220,7 +224,7 @@ bool resumejob(int j, int bg, sigset_t *mask) {
 
   Signal(SIGCONT, sigchld_handler);
 
-  kill(-jobs[j].pgid, SIGCONT);
+  Kill(-jobs[j].pgid, SIGCONT);
   jobs[j].state = RUNNING;
 
   /* foreground job */
@@ -242,8 +246,7 @@ bool killjob(int j) {
   debug("[%d] killing '%s'\n", j, jobs[j].command);
 
   /* TODO: I love the smell of napalm in the morning. */
-  int k = kill(-jobs[j].pgid, SIGTERM);
-  assert(k == 0);
+  Kill(-jobs[j].pgid, SIGTERM);
 
   return true;
 }
@@ -264,7 +267,7 @@ void watchjobs(int which) {
 #ifdef DEBUG
     printf("jobstate - which -> %d - j: %d - status: %d", which, j, jobs[j].state);
 #endif
-    if (jobstate(j, &statusp) == which) {
+    if (jobstate(j, &statusp) == which || which == ALL) {
       msg("[%d] ", j);
       if (WIFEXITED(statusp)) {
         msg("exited, status=%d, command=%s\n", WEXITSTATUS(statusp), jobcmd(j));
@@ -286,18 +289,25 @@ int monitorjob(sigset_t *mask) {
 #ifdef DEBUG
   printf("SHELL: monitorjob - TODO\n");
 #endif
-  /* TODO: Following code requires use of Tcsetpgrp of tty_fd. */
-  /*Signal(SIGTSTP, sigchld_handler);
+  exitcode = -1;
   while (true) {
-    //(void) jobstate(j, &exitcode);
-    printf("State %d\n", exitcode);
+    state = jobstate(FG, &exitcode);
+    printf("monitorjob\n");
+    if (state == STOPPED) {
+      Tcsetpgrp(tty_fd, getpgrp());
+      movejob(FG, allocjob());
+    } else if (state == FINISHED) {
+      Tcsetpgrp(tty_fd, getpgrp());
+    }
+
     if (exitcode < 0) {
       Sigsuspend(mask);
     } else {
       break;
     }
-  }*/
+  }
 
+  printf("End of monitorjob\n");
   return exitcode;
 }
 

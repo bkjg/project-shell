@@ -1,5 +1,7 @@
 #include "shell.h"
 
+//#define DEBUG 0
+
 typedef int (*func_t)(char **argv);
 
 typedef struct {
@@ -119,6 +121,10 @@ noreturn void external_command(char **argv) {
       command = strndup(path, pos);
       strapp(&command, "/");
       strapp(&command, argv[0]);
+
+      //if (argv[3] == NULL)
+      //printf("%s %s %s %s %s\n", command, argv[0], argv[1], argv[2], argv[3]);
+      
       (void) execve(command, argv, environ);
       path += (pos + 1);
       free(command);
