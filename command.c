@@ -10,6 +10,7 @@ typedef struct {
 } command_t;
 
 static int do_quit(char **argv) {
+  shutdownjobs();
   exit(EXIT_SUCCESS);
 }
 

@@ -63,7 +63,6 @@ static void sigchld_handler(int sig) {
         } else if (WIFSTOPPED(status)) {
           proc->state = STOPPED;
         } else if (WIFCONTINUED(status)) {
-          printf("stop: %d\n", status);
           proc->state = RUNNING;
           proc->exitcode = status;
         }
@@ -227,16 +226,18 @@ bool resumejob(int j, int bg, sigset_t *mask) {
   /* TODO: Continue stopped job. Possibly move job to foreground slot. */
   assert (j != FG);
 
-  //Signal(SIGCONT, sigchld_handler);
-
-  jobs[j].state = RUNNING;
-  Kill(-jobs[j].pgid, SIGCONT);
+  if (jobs[j].state == STOPPED) {
+    Kill(-jobs[j].pgid, SIGCONT);
+    while (jobs[j].state != RUNNING) {
+      Sigsuspend(mask);
+    }
+    //watchjobs(RUNNING);
+  }
 
   /* foreground job */
   if (!bg) {
     Tcsetpgrp(tty_fd, jobs[j].pgid);
     movejob(j, FG);
-    watchjobs(RUNNING);
     (void) monitorjob(mask);
   }
 
@@ -253,8 +254,11 @@ bool killjob(int j) {
   debug("[%d] killing '%s'\n", j, jobs[j].command);
 
   /* TODO: I love the smell of napalm in the morning. */
-  Kill(-jobs[j].pgid, SIGTERM);
 
+  if (jobs[j].state == STOPPED) {
+    Kill(-jobs[j].pgid, SIGCONT);
+  }
+  Kill(-jobs[j].pgid, SIGTERM);
   return true;
 }
 
@@ -278,7 +282,7 @@ void watchjobs(int which) {
       statusp = exitcode(&jobs[j]);
       if (state == RUNNING) {
         if (statusp != -1 && WIFCONTINUED(statusp)) {
-          msg("continued '%s'\n", jobcmd(j));
+          msg("continue '%s'\n", jobcmd(j));
         } else {
           msg("running '%s'\n", jobcmd(j));
         }
@@ -313,16 +317,19 @@ int monitorjob(sigset_t *mask) {
     Sigsuspend(mask);
   }
 
+  state = jobs[FG].state;
   Sigprocmask(SIG_SETMASK, &old_mask, NULL);
   if (state == STOPPED) {
     Tcsetpgrp(tty_fd, getpgrp());
     int j = allocjob();
     jobs[j].pgid = 0;
-    jobs[j].state = FINISHED;
+    jobs[j].state = STOPPED;
     movejob(FG, j);
+    watchjobs(STOPPED);
   } else if (state == FINISHED) {
     Tcsetpgrp(tty_fd, getpgrp());
     status = exitcode(&jobs[FG]);
+    watchjobs(FINISHED);
     deljob(&jobs[FG]);
   }
 
@@ -355,12 +362,10 @@ void shutdownjobs(void) {
   for (int j = BG; j < njobmax; ++j) {
     if (jobs[j].state != FINISHED) {
       killjob(j);
-      Waitpid(-jobs[j].pgid, NULL, 0);
     }
   }
 
   watchjobs(FINISHED);
-
   Sigprocmask(SIG_SETMASK, &mask, NULL);
 
   Close(tty_fd);
