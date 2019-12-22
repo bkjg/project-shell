@@ -84,7 +84,7 @@ static int do_job(token_t *token, int ntokens, bool bg) {
 
   if (pid == 0) {  
     Sigprocmask(SIG_SETMASK, &mask, NULL);
-    //Setpgid(getpid(), getpid());
+    Setpgid(0, 0);
 
     if (input != -1) {
       Dup2(input, STDIN_FILENO);
@@ -96,11 +96,16 @@ static int do_job(token_t *token, int ntokens, bool bg) {
       close(output);
     }
 
+    Signal(SIGCHLD, SIG_DFL);
+    Signal(SIGINT, SIG_DFL);
+    Signal(SIGTSTP, SIG_DFL);
+    Signal(SIGTTIN, SIG_DFL);
+    Signal(SIGTTOU, SIG_DFL);
+
     external_command(token);
   }
 
-  Setpgid(pid, getpid());
-  int j = addjob(getpgid(pid), bg);
+  int j = addjob(pid, bg);
   addproc(j, pid, token);
 
   if (!bg) {
@@ -192,6 +197,7 @@ static int do_pipeline(token_t *token, int ntokens, bool bg) {
   for (int i = size + 1; i < ntokens; ++i) {
     if (token[i] == T_PIPE) {
       token[i] = T_NULL;
+      assert(i - size -1 > 0);
       if (next_input > 0) {
         mkpipe(&input, &next_output);
         pid = do_stage(pgid, &mask, next_input, next_output, token + size + 1, i - size - 1);
@@ -212,6 +218,7 @@ static int do_pipeline(token_t *token, int ntokens, bool bg) {
     }
   }
 
+  assert(ntokens - size -1 > 0);
   if (next_input > 0) {
     pid = do_stage(pgid, &mask, next_input, next_output, token + size + 1, ntokens - size - 1);
     Close(next_input);

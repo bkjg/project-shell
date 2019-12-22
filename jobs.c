@@ -48,7 +48,7 @@ static void sigchld_handler(int sig) {
   pid_t pid;
   int status;
 #ifdef DEBUG
-  printf("JOBS: sigchld_handler - TODO (implemented)\n");
+  printf("JOBS: sigchld_handler - TODO (implemented) , SIG = %d\n", sig);
 #endif
   /* TODO: Chan ge state (FINISHED, RUNNING, STOPPED) of processes and jobs.
    * Bury all children that finished saving their status in jobs. */
@@ -63,7 +63,9 @@ static void sigchld_handler(int sig) {
         } else if (WIFSTOPPED(status)) {
           proc->state = STOPPED;
         } else if (WIFCONTINUED(status)) {
+          printf("stop: %d\n", status);
           proc->state = RUNNING;
+          proc->exitcode = status;
         }
 
         jobs[i].state = job_state(jobs[i]);
@@ -73,7 +75,6 @@ static void sigchld_handler(int sig) {
     }
   }
 
-  //printf("End of sigchild\n");
   watchjobs(ALL);
   errno = old_errno;
 }
@@ -122,6 +123,11 @@ int addjob(pid_t pgid, int bg) {
   job->command = NULL;
   job->proc = NULL;
   job->nproc = 0;
+
+  if (bg) {
+    msg("[%d] %d\n", j, pgid);
+  }
+
   return j;
 }
 
@@ -183,7 +189,7 @@ int jobstate(int j, int *statusp) {
   job_t *job = &jobs[j];
   int state = job->state;
 #ifdef DEBUG
-  printf("JOBS: jobstate - TODO (implemented)\n");
+  //printf("JOBS: jobstate - TODO (implemented)\n");
 #endif
 
   /* TODO: Handle case where job has finished. */
@@ -221,14 +227,16 @@ bool resumejob(int j, int bg, sigset_t *mask) {
   /* TODO: Continue stopped job. Possibly move job to foreground slot. */
   assert (j != FG);
 
-  Signal(SIGCONT, sigchld_handler);
+  //Signal(SIGCONT, sigchld_handler);
 
-  Kill(-jobs[j].pgid, SIGCONT);
   jobs[j].state = RUNNING;
+  Kill(-jobs[j].pgid, SIGCONT);
 
   /* foreground job */
   if (!bg) {
+    Tcsetpgrp(tty_fd, jobs[j].pgid);
     movejob(j, FG);
+    watchjobs(RUNNING);
     (void) monitorjob(mask);
   }
 
@@ -262,20 +270,27 @@ void watchjobs(int which) {
 
     /* TODO: Report job number, state, command and exit code or signal. */
     int statusp;
+    int state;
 
-#ifdef DEBUG
-    printf("jobstate - which -> %d - j: %d - status: %d", which, j, jobs[j].state);
-#endif
-    if (jobstate(j, &statusp) == which || which == ALL) {
+    state = jobs[j].state;
+    if (state == which || which == ALL) {
       msg("[%d] ", j);
-      if (WIFEXITED(statusp)) {
-        msg("exited, status=%d, command=%s\n", WEXITSTATUS(statusp), jobcmd(j));
-      } else if (WIFSIGNALED(statusp)) {
-        msg("killed by signal %d, command=%s\n", WTERMSIG(statusp), jobcmd(j));
-      } else if (WIFSTOPPED(statusp)) {
-        msg("stopped by signal %d, command=%s\n", WSTOPSIG(statusp), jobcmd(j));
-      } else if (WIFCONTINUED(statusp)) {
-        msg("continued, command=%s\n", jobcmd(j));
+      statusp = exitcode(&jobs[j]);
+      if (state == RUNNING) {
+        if (statusp != -1 && WIFCONTINUED(statusp)) {
+          msg("continued '%s'\n", jobcmd(j));
+        } else {
+          msg("running '%s'\n", jobcmd(j));
+        }
+      } else if (state == STOPPED) {
+        msg("suspended '%s'\n", jobcmd(j));
+      } else {
+        if (WIFEXITED(statusp)) {
+          msg("exited '%s', status=%d\n", jobcmd(j), WEXITSTATUS(statusp));
+        } else if (WIFSIGNALED(statusp)) {
+          msg("killed '%s' by signal %d\n", jobcmd(j), WTERMSIG(statusp));
+        }
+        deljob(&jobs[j]);
       }
     }
   }
@@ -284,28 +299,34 @@ void watchjobs(int which) {
 /* Monitor job execution. If it gets stopped move it to background.
  * When a job has finished or has been stopped move shell to foreground. */
 int monitorjob(sigset_t *mask) {
-  int exitcode, state;
+  int status, state;
 #ifdef DEBUG
   printf("SHELL: monitorjob - TODO\n");
 #endif
-  exitcode = -1;
-  while (true) {
-    state = jobstate(FG, &exitcode);
-    if (state == STOPPED) {
-      Tcsetpgrp(tty_fd, getpgrp());
-      movejob(FG, allocjob());
-    } else if (state == FINISHED) {
-      Tcsetpgrp(tty_fd, getpgrp());
-    }
+/* TODO: Following code requires use of Tcsetpgrp of tty_fd. */
+  status = -1;
+  Tcsetpgrp(tty_fd, jobs[FG].pgid);
+  sigset_t old_mask;
+  Sigprocmask(SIG_SETMASK, mask, &old_mask);
 
-    if (exitcode < 0) {
-      Sigsuspend(mask);
-    } else {
-      break;
-    }
+  while ((state = jobs[FG].state) == RUNNING) {
+    Sigsuspend(mask);
   }
 
-  return exitcode;
+  Sigprocmask(SIG_SETMASK, &old_mask, NULL);
+  if (state == STOPPED) {
+    Tcsetpgrp(tty_fd, getpgrp());
+    int j = allocjob();
+    jobs[j].pgid = 0;
+    jobs[j].state = FINISHED;
+    movejob(FG, j);
+  } else if (state == FINISHED) {
+    Tcsetpgrp(tty_fd, getpgrp());
+    status = exitcode(&jobs[FG]);
+    deljob(&jobs[FG]);
+  }
+
+  return status;
 }
 
 /* Called just at the beginning of shell's life. */
