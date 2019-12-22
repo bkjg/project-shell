@@ -1,7 +1,5 @@
 #include "shell.h"
 
-//#define DEBUG 0
-
 typedef int (*func_t)(char **argv);
 
 typedef struct {
@@ -111,9 +109,7 @@ int builtin_command(char **argv) {
 
 noreturn void external_command(char **argv) {
   const char *path = getenv("PATH");
-#ifdef DEBUG
-  printf("COMMAND: external_command\n");
-#endif
+
   if (!index(argv[0], '/') && path) {
     /* TODO: For all paths in PATH construct an absolute path and execve it. */
     char* command;
@@ -123,9 +119,6 @@ noreturn void external_command(char **argv) {
       strapp(&command, "/");
       strapp(&command, argv[0]);
 
-      //if (argv[3] == NULL)
-      //printf("%s %s %s %s %s\n", command, argv[0], argv[1], argv[2], argv[3]);
-      
       (void) execve(command, argv, environ);
       path += (pos + 1);
       free(command);

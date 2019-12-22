@@ -1,6 +1,7 @@
 #include "shell.h"
 
-//#define DEBUG 0
+//include was added to save terminal parameters because processes like vim and watch change them
+#include "termios.h"
 
 typedef struct proc {
   pid_t pid;    /* process identifier */
@@ -47,11 +48,10 @@ static void sigchld_handler(int sig) {
   int old_errno = errno;
   pid_t pid;
   int status;
-#ifdef DEBUG
-  printf("JOBS: sigchld_handler - TODO (implemented) , SIG = %d\n", sig);
-#endif
+
   /* TODO: Chan ge state (FINISHED, RUNNING, STOPPED) of processes and jobs.
    * Bury all children that finished saving their status in jobs. */
+  bool status_changed = false;
   while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED)) > 0) {
     for (int i = 0; i < njobmax; ++i) {
       if (jobs[i].pgid != 0) {
@@ -67,30 +67,28 @@ static void sigchld_handler(int sig) {
           proc->exitcode = status;
         }
 
+        int prev_state = jobs[i].state;
         jobs[i].state = job_state(jobs[i]);
-
+        if (prev_state != jobs[i].state) {
+          status_changed = true;
+        }
         break;
       }
     }
   }
 
-  watchjobs(ALL);
+  if (status_changed) {
+    watchjobs(ALL);
+  }
   errno = old_errno;
 }
 
 /* When pipeline is done, its exitcode is fetched from the last process. */
 static int exitcode(job_t *job) {
-#ifdef DEBUG
-  printf("JOBS: exitcode (implemented)\n");
-  printf("exitcode: %d\n", job->nproc);
-#endif
   return job->proc[job->nproc - 1].exitcode;
 }
 
 static int allocjob(void) {
-#ifdef DEBUG
-  printf("JOBS: allocjob (implemented)\n");
-#endif
   /* Find empty slot for background job. */
   for (int j = BG; j < njobmax; j++)
     if (jobs[j].pgid == 0)
@@ -102,18 +100,12 @@ static int allocjob(void) {
 }
 
 static int allocproc(int j) {
-#ifdef DEBUG
-  printf("JOBS: allocproc (implemented)\n");
-#endif
   job_t *job = &jobs[j];
   job->proc = realloc(job->proc, sizeof(proc_t) * (job->nproc + 1));
   return job->nproc++;
 }
 
 int addjob(pid_t pgid, int bg) {
-#ifdef DEBUG
-  printf("JOBS: addjob (implemented)\n");
-#endif
   int j = bg ? allocjob() : FG;
   job_t *job = &jobs[j];
   /* Initial state of a job. */
@@ -131,9 +123,6 @@ int addjob(pid_t pgid, int bg) {
 }
 
 static void deljob(job_t *job) {
-#ifdef DEBUG
-  printf("JOBS: deljob (implemented)\n");
-#endif
   assert(job->state == FINISHED);
   free(job->command);
   free(job->proc);
@@ -144,18 +133,12 @@ static void deljob(job_t *job) {
 }
 
 static void movejob(int from, int to) {
-#ifdef DEBUG
-  printf("JOBS: movejob (implemented)\n");
-#endif
   assert(jobs[to].pgid == 0);
   memcpy(&jobs[to], &jobs[from], sizeof(job_t));
   memset(&jobs[from], 0, sizeof(job_t));
 }
 
 static void mkcommand(char **cmdp, char **argv) {
-#ifdef DEBUG
-  printf("JOBS: mkcommand (implemented)\n");
-#endif
   if (*cmdp)
     strapp(cmdp, " | ");
 
@@ -168,9 +151,6 @@ static void mkcommand(char **cmdp, char **argv) {
 void addproc(int j, pid_t pid, char **argv) {
   assert(j < njobmax);
   job_t *job = &jobs[j];
-#ifdef DEBUG
-  printf("JOBS: addproc (implemented)\n");
-#endif
 
   int p = allocproc(j);
   proc_t *proc = &job->proc[p];
@@ -187,9 +167,6 @@ int jobstate(int j, int *statusp) {
   assert(j < njobmax);
   job_t *job = &jobs[j];
   int state = job->state;
-#ifdef DEBUG
-  //printf("JOBS: jobstate - TODO (implemented)\n");
-#endif
 
   /* TODO: Handle case where job has finished. */
   if (state == FINISHED && job->pgid != 0) {
@@ -202,9 +179,6 @@ int jobstate(int j, int *statusp) {
 
 char *jobcmd(int j) {
   assert(j < njobmax);
-#ifdef DEBUG
-  printf("JOBS: jobcmd\n");
-#endif
   job_t *job = &jobs[j];
   return job->command;
 }
@@ -212,9 +186,6 @@ char *jobcmd(int j) {
 /* Continues a job that has been stopped. If move to foreground was requested,
  * then move the job to foreground and start monitoring it. */
 bool resumejob(int j, int bg, sigset_t *mask) {
-#ifdef DEBUG
-  printf("JOBS: resumejob - TODO (implemented)\n");
-#endif
   if (j < 0) {
     for (j = njobmax - 1; j > 0 && jobs[j].state == FINISHED; j--)
       continue;
@@ -227,16 +198,17 @@ bool resumejob(int j, int bg, sigset_t *mask) {
   assert (j != FG);
 
   if (jobs[j].state == STOPPED) {
-    Kill(-jobs[j].pgid, SIGCONT);
     while (jobs[j].state != RUNNING) {
+      Kill(-jobs[j].pgid, SIGCONT);
       Sigsuspend(mask);
     }
-    //watchjobs(RUNNING);
   }
+
+  Kill(-jobs[j].pgid, SIGCONT);
+  jobs[j].state = RUNNING;
 
   /* foreground job */
   if (!bg) {
-    Tcsetpgrp(tty_fd, jobs[j].pgid);
     movejob(j, FG);
     (void) monitorjob(mask);
   }
@@ -246,9 +218,6 @@ bool resumejob(int j, int bg, sigset_t *mask) {
 
 /* Kill the job by sending it a SIGTERM. */
 bool killjob(int j) {
-#ifdef DEBUG
-  printf("JOBS: killjob - TODO (implemented)\n");
-#endif
   if (j >= njobmax || jobs[j].state == FINISHED)
     return false;
   debug("[%d] killing '%s'\n", j, jobs[j].command);
@@ -264,10 +233,6 @@ bool killjob(int j) {
 
 /* Report state of requested background jobs. Clean up finished jobs. */
 void watchjobs(int which) {
-#ifdef DEBUG
-  printf("JOBS: watchjobs - TODO (implemented)\n");
-  printf("watchjobs %d %d\n", BG, njobmax);
-#endif
   for (int j = BG; j < njobmax; j++) {
     if (jobs[j].pgid == 0)
       continue;
@@ -304,15 +269,16 @@ void watchjobs(int which) {
  * When a job has finished or has been stopped move shell to foreground. */
 int monitorjob(sigset_t *mask) {
   int status, state;
-#ifdef DEBUG
-  printf("SHELL: monitorjob - TODO\n");
-#endif
+
 /* TODO: Following code requires use of Tcsetpgrp of tty_fd. */
   status = -1;
+  struct termios ots;
+  // save old terminal parameters, because processes like vim changes them
+  tcgetattr(tty_fd, &ots);
+
   Tcsetpgrp(tty_fd, jobs[FG].pgid);
   sigset_t old_mask;
   Sigprocmask(SIG_SETMASK, mask, &old_mask);
-
   while ((state = jobs[FG].state) == RUNNING) {
     Sigsuspend(mask);
   }
@@ -321,6 +287,7 @@ int monitorjob(sigset_t *mask) {
   Sigprocmask(SIG_SETMASK, &old_mask, NULL);
   if (state == STOPPED) {
     Tcsetpgrp(tty_fd, getpgrp());
+    tcsetattr(tty_fd, TCSADRAIN, &ots);
     int j = allocjob();
     jobs[j].pgid = 0;
     jobs[j].state = STOPPED;
@@ -328,6 +295,8 @@ int monitorjob(sigset_t *mask) {
     watchjobs(STOPPED);
   } else if (state == FINISHED) {
     Tcsetpgrp(tty_fd, getpgrp());
+    //restore terminal parameters 
+    tcsetattr(tty_fd, TCSADRAIN, &ots);
     status = exitcode(&jobs[FG]);
     watchjobs(FINISHED);
     deljob(&jobs[FG]);
@@ -340,9 +309,7 @@ int monitorjob(sigset_t *mask) {
 void initjobs(void) {
   Signal(SIGCHLD, sigchld_handler);
   jobs = calloc(sizeof(job_t), 1);
-#ifdef DEBUG
-  printf("JOBS: initjobs (implemented)\n");
-#endif
+  
   /* Assume we're running in interactive mode, so move us to foreground.
    * Duplicate terminal fd, but do not leak it to subprocesses that execve. */
   assert(isatty(STDIN_FILENO));
@@ -355,9 +322,7 @@ void initjobs(void) {
 void shutdownjobs(void) {
   sigset_t mask;
   Sigprocmask(SIG_BLOCK, &sigchld_mask, &mask);
-#ifdef DEBUG
-  printf("JOBS: shutdownjobs - TODO (implemented?)\n");
-#endif
+  
   /* TODO: Kill remaining jobs and wait for them to finish. */
   for (int j = BG; j < njobmax; ++j) {
     if (jobs[j].state != FINISHED) {
