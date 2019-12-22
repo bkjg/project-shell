@@ -53,7 +53,6 @@ static void sigchld_handler(int sig) {
   /* TODO: Chan ge state (FINISHED, RUNNING, STOPPED) of processes and jobs.
    * Bury all children that finished saving their status in jobs. */
   while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED)) > 0) {
-    printf("pid = %d\n", pid);
     for (int i = 0; i < njobmax; ++i) {
       if (jobs[i].pgid != 0) {
         proc_t *proc = findPid(jobs[i], pid);
@@ -292,7 +291,6 @@ int monitorjob(sigset_t *mask) {
   exitcode = -1;
   while (true) {
     state = jobstate(FG, &exitcode);
-    printf("monitorjob\n");
     if (state == STOPPED) {
       Tcsetpgrp(tty_fd, getpgrp());
       movejob(FG, allocjob());
@@ -307,7 +305,6 @@ int monitorjob(sigset_t *mask) {
     }
   }
 
-  printf("End of monitorjob\n");
   return exitcode;
 }
 

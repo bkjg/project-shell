@@ -22,12 +22,8 @@ static int do_redir(token_t *token, int ntokens, int *inputp, int *outputp) {
 #endif
   for (int i = 0; i < ntokens; i++) {
     /* TODO: Handle tokens and open files as requested. */
-<<<<<<< HEAD
     mode = token[i];
     if (separator_p(mode)) {
-=======
-    if (separator_p(token[i])) {
->>>>>>> b5eb13d... Add implementation of pipeline
       token[n] = token[i];
       n++;
     } else if (string_p(mode)) {
@@ -108,19 +104,7 @@ static int do_job(token_t *token, int ntokens, bool bg) {
   addproc(j, pid, token);
 
   if (!bg) {
-<<<<<<< HEAD
     exitcode = monitorjob(&mask);
-=======
-    while (true) {
-      monitorjob(&mask);
-      (void) jobstate(j, &exitcode);
-      if (exitcode < 0) {
-        Sigsuspend(&mask);
-      } else {
-        break;
-      }
-    }
->>>>>>> b5eb13d... Add implementation of pipeline
   }
 
   Sigprocmask(SIG_SETMASK, &mask, NULL);
@@ -140,16 +124,16 @@ static pid_t do_stage(pid_t pgid, sigset_t *mask, int input, int output,
 
   if (pid == 0) {
     Sigprocmask(SIG_SETMASK, mask, NULL);
-    Setpgid(getpid(), pgid);
+    Setpgid(0, pgid);
 
     if (input != -1) {
       Dup2(input, STDIN_FILENO);
-      close(input);
+      Close(input);
     }
 
     if (output != -1) {
       Dup2(output, STDOUT_FILENO);
-      close(output);
+      Close(output);
     }
 
     if (builtin_command(token) >= 0) {
@@ -187,51 +171,58 @@ static int do_pipeline(token_t *token, int ntokens, bool bg) {
 
   /* TODO: Start pipeline subprocesses, create a job and monitor it.
    * Remember to close unused pipe ends! */
-  pid = Fork();
-  exitcode = -1;
-  pid_t pid1, pid2;
-  if (pid == 0) {
-    //Sigprocmask(SIG_SETMASK, &mask, NULL);
-    pgid = getpid();
-    Setpgid(getpid(), pgid);
+  size_t size = 0;  
 
-    size_t size; 
-    for (int i = 0; i < ntokens; ++i) {
-      if (token[i] == T_PIPE) {
-        token[i] = T_NULL;
-        size = i;
-        break;
-      }
+  for (int i = 0; i < ntokens; ++i) {
+    if (token[i] == T_PIPE) {
+      token[i] = T_NULL;
+      size = i;
+      break;
     }
-
-    sigset_t old;
-    pid1 = do_stage(pgid, &mask, input, output, token, size);
-    int j = addjob(pgid, bg);
-    addproc(j, getpid(), token);
-    addproc(j, pid1, token);
-
-    Sigsuspend(&mask);
-    printf("First child returned\n");
-    Sigprocmask(SIG_SETMASK, &mask, NULL);
-
-    //Waitpid(pid1, NULL, NULL);
-
-    Sigprocmask(SIG_BLOCK, &sigchld_mask, &mask);
-    pid2 = do_stage(pgid, &mask, next_input, input, token + size + 1, ntokens - size - 1);
-    //Kill(pid2, SIGKILL);
-    //Waitpid(pid2, NULL, NULL);
-    printf("YAY\n");
-    //Sigprocmask(SIG_SETMASK, &mask, &old);
-    //printf("Second child returned %d\n", sigismember(&old, SIGCHLD));
-    addproc(j, pid2, token + size + 1);
-    printf("status: %d\n", jobstate(j, NULL));
-    printf("bg = %d, %d\n", bg, j);
-    Sigsuspend(&mask);
-    Sigprocmask(SIG_SETMASK, &mask, NULL);
   }
 
+
+  pgid = do_stage(pgid, &mask, input, output, token, size);
+  Close(output);
+  output = -1;
+  int j = addjob(pgid, bg);
+  addproc(j, pgid, token);
+
+  int next_output = -1;
+  for (int i = size + 1; i < ntokens; ++i) {
+    if (token[i] == T_PIPE) {
+      token[i] = T_NULL;
+      if (next_input > 0) {
+        mkpipe(&input, &next_output);
+        pid = do_stage(pgid, &mask, next_input, next_output, token + size + 1, i - size - 1);
+        Close(next_input);
+        Close(next_output);
+        next_input = -1;
+        next_output = -1;
+      } else {
+        mkpipe(&next_input, &output);
+        pid = do_stage(pgid, &mask, input, output, token + size + 1, i - size - 1);
+        Close(input);
+        Close(output);
+        input = -1;
+        output = -1;
+      }
+      addproc(j, pid, token + size + 1);
+      size = i;
+    }
+  }
+
+  if (next_input > 0) {
+    pid = do_stage(pgid, &mask, next_input, next_output, token + size + 1, ntokens - size - 1);
+    Close(next_input);
+  } else {
+    pid = do_stage(pgid, &mask, input, output, token + size + 1, ntokens - size - 1);
+    Close(input);
+  }
+
+  addproc(j, pid, token + size + 1);
+
   if (!bg) {
-    //printf("Go to monitorjob\n");
     monitorjob(&mask);
   }
 
