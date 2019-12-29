@@ -52,7 +52,7 @@ static int do_redir(token_t *token, int ntokens, int *inputp, int *outputp) {
         assert(*outputp >= 0); 
       } else {
         /* BANG operator */
-
+        i++;
       }
     }
   }
@@ -72,6 +72,8 @@ static int do_job(token_t *token, int ntokens, bool bg) {
   int exitcode = 0;
 
   ntokens = do_redir(token, ntokens, &input, &output);
+
+  assert(ntokens != 0);
 
   if (!bg) {
     if ((exitcode = builtin_command(token)) >= 0)
@@ -194,6 +196,7 @@ static int do_pipeline(token_t *token, int ntokens, bool bg) {
   job = addjob(pgid, bg);
   addproc(job, pgid, token);
 
+  //Sigprocmask(SIG_BLOCK, &sigchld_mask, &mask);
   int next_output = -1;
   for (int i = size + 1; i < ntokens; ++i) {
     if (token[i] == T_PIPE) {
@@ -262,8 +265,54 @@ static void eval(char *cmdline) {
   free(token);
 }
 
+// set the line to the name of directory, replace name of home directory by '~'
+void set_line (char* buf) {
+  const char *homedir = getenv("HOME");
+
+  char* ptr = getcwd(buf, MAXLINE);
+
+  if (ptr == NULL) {
+    buf[0] = '#';
+    buf[1] = ' ';
+    buf[2] = '\0';
+    return;
+  }
+
+  char* pos;
+  if ((pos = strstr(buf, homedir)) != NULL) {
+    strcpy(buf + 1, pos + strlen(homedir));
+    buf[0] = '~';
+  }
+
+  size_t length = strlen(buf);
+  buf[length + 2] = buf[length];
+  buf[length] = '$';
+  buf[length + 1] = ' ';
+}
+
+void find_bang (char* line) {
+  char *expansion;
+  int pos;
+  if ((pos = strcspn(line, "!")) >= 0 && pos < strlen(line)) {
+    int h = history_expand(line, &expansion);
+
+    if (h < 0) {
+      app_error("Bang error\n");
+    }
+
+    if (strlen(line) < strlen(expansion)) {
+      line = (char *) realloc(line, strlen(expansion));
+    }
+
+    strcpy(line, expansion);
+  }
+}
+
 int main(int argc, char *argv[]) {
   rl_initialize();
+
+  //read history from ~/.history
+  read_history(NULL);
 
   sigemptyset(&sigchld_mask);
   sigaddset(&sigchld_mask, SIGCHLD);
@@ -278,9 +327,13 @@ int main(int argc, char *argv[]) {
   Signal(SIGTTOU, SIG_IGN);
 
   char *line;
+  char buf[MAXLINE];
+
   while (true) {
     if (!sigsetjmp(loop_env, 1)) {
-      line = readline("# ");
+      set_line(buf);
+      //line = readline("# ");
+      line = readline(buf);
     } else {
       msg("\n");
       continue;
@@ -290,11 +343,17 @@ int main(int argc, char *argv[]) {
       break;
 
     if (strlen(line)) {
+      // check if bang exist in command
+      find_bang(line); 
       add_history(line);
       eval(line);
     }
+
     free(line);
     watchjobs(FINISHED);
+
+    //save history to ~/.history
+    write_history(NULL);
   }
 
   msg("\n");

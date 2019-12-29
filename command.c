@@ -7,6 +7,20 @@ typedef struct {
   func_t func;
 } command_t;
 
+//do_history added to display the history of commands
+static int do_history(char **argv) {
+
+  if (Fork() == 0) {
+    const char* homedir = getenv("HOME");
+    char* path = strndup(homedir, strlen(homedir));
+    strapp(&path, "/.history");
+    char*argvv[] = {"cat", path, NULL};
+    external_command(argvv);
+  }
+
+  return 0;
+}
+
 static int do_quit(char **argv) {
   shutdownjobs();
   exit(EXIT_SUCCESS);
@@ -93,7 +107,7 @@ static int do_kill(char **argv) {
 
 static command_t builtins[] = {
   {"quit", do_quit}, {"cd", do_chdir},  {"jobs", do_jobs}, {"fg", do_fg},
-  {"bg", do_bg},     {"kill", do_kill}, {NULL, NULL},
+  {"bg", do_bg},     {"kill", do_kill}, {"history", do_history}, {NULL, NULL},
 };
 
 int builtin_command(char **argv) {

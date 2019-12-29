@@ -71,6 +71,7 @@ static void sigchld_handler(int sig) {
     }
   }
 
+  watchjobs(FINISHED);
   errno = old_errno;
 }
 
@@ -336,6 +337,7 @@ void shutdownjobs(void) {
   for (int j = BG; j < njobmax; ++j) {
     if (jobs[j].state != FINISHED) {
       killjob(j);
+      Sigsuspend(&mask);
     }
   }
 
