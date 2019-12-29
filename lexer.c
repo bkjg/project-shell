@@ -15,6 +15,7 @@ void strapp(char **dstp, const char *src) {
 token_t *tokenize(char *s, int *tokc_p) {
   int capacity = 10;
   int ntoks = 0;
+
   token_t *tokvec = malloc(sizeof(token_t) * (capacity + 1));
 
   while (*s != 0) {

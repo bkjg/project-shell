@@ -1,8 +1,5 @@
 #include "shell.h"
 
-//include was added to save terminal parameters because processes like vim and watch change them
-#include "termios.h"
-
 typedef struct proc {
   pid_t pid;    /* process identifier */
   int state;    /* RUNNING or STOPPED or FINISHED */
@@ -10,16 +7,18 @@ typedef struct proc {
 } proc_t;
 
 typedef struct job {
-  pid_t pgid;    /* 0 if slot is free */
-  proc_t *proc;  /* array of processes running in as a job */
-  int nproc;     /* number of processes */
-  int state;     /* changes when live processes have same state */
-  char *command; /* textual representation of command line */
+  pid_t pgid;            /* 0 if slot is free */
+  proc_t *proc;          /* array of processes running in as a job */
+  struct termios tmodes; /* saved terminal modes */
+  int nproc;             /* number of processes */
+  int state;             /* changes when live processes have same state */
+  char *command;         /* textual representation of command line */
 } job_t;
 
-static job_t *jobs = NULL; /* array of all jobs */
-static int njobmax = 1;    /* number of slots in jobs array */
-static int tty_fd = -1;    /* controlling terminal file descriptor */
+static job_t *jobs = NULL;          /* array of all jobs */
+static int njobmax = 1;             /* number of slots in jobs array */
+static int tty_fd = -1;             /* controlling terminal file descriptor */
+static struct termios shell_tmodes; /* saved shell terminal modes */
 
 static proc_t* findPid(job_t job, pid_t pid) {
   for (int i = 0; i < job.nproc; ++i) {
@@ -48,10 +47,8 @@ static void sigchld_handler(int sig) {
   int old_errno = errno;
   pid_t pid;
   int status;
-
-  /* TODO: Chan ge state (FINISHED, RUNNING, STOPPED) of processes and jobs.
+  /* TODO: Change state (FINISHED, RUNNING, STOPPED) of processes and jobs.
    * Bury all children that finished saving their status in jobs. */
-  bool status_changed = false;
   while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED)) > 0) {
     for (int i = 0; i < njobmax; ++i) {
       if (jobs[i].pgid != 0) {
@@ -62,24 +59,18 @@ static void sigchld_handler(int sig) {
           proc->exitcode = status;
         } else if (WIFSTOPPED(status)) {
           proc->state = STOPPED;
+          proc->exitcode = status;
         } else if (WIFCONTINUED(status)) {
           proc->state = RUNNING;
           proc->exitcode = status;
         }
 
-        int prev_state = jobs[i].state;
         jobs[i].state = job_state(jobs[i]);
-        if (prev_state != jobs[i].state) {
-          status_changed = true;
-        }
         break;
       }
     }
   }
 
-  if (status_changed) {
-    watchjobs(ALL);
-  }
   errno = old_errno;
 }
 
@@ -96,6 +87,7 @@ static int allocjob(void) {
 
   /* If none found, allocate new one. */
   jobs = realloc(jobs, sizeof(job_t) * (njobmax + 1));
+  memset(&jobs[njobmax], 0, sizeof(job_t));
   return njobmax++;
 }
 
@@ -114,7 +106,9 @@ int addjob(pid_t pgid, int bg) {
   job->command = NULL;
   job->proc = NULL;
   job->nproc = 0;
+  job->tmodes = shell_tmodes;
 
+// added reporting about starting process in background
   if (bg) {
     msg("[%d] %d\n", j, pgid);
   }
@@ -195,17 +189,16 @@ bool resumejob(int j, int bg, sigset_t *mask) {
     return false;
 
   /* TODO: Continue stopped job. Possibly move job to foreground slot. */
-  assert (j != FG);
-
   if (jobs[j].state == STOPPED) {
+// while loop was added to make sure that process received sigcont
+// particulary: vim 
     while (jobs[j].state != RUNNING) {
       Kill(-jobs[j].pgid, SIGCONT);
       Sigsuspend(mask);
     }
   }
 
-  Kill(-jobs[j].pgid, SIGCONT);
-  jobs[j].state = RUNNING;
+  watchjobs(RUNNING);
 
   /* foreground job */
   if (!bg) {
@@ -223,11 +216,12 @@ bool killjob(int j) {
   debug("[%d] killing '%s'\n", j, jobs[j].command);
 
   /* TODO: I love the smell of napalm in the morning. */
-
   if (jobs[j].state == STOPPED) {
     Kill(-jobs[j].pgid, SIGCONT);
   }
+
   Kill(-jobs[j].pgid, SIGTERM);
+
   return true;
 }
 
@@ -243,21 +237,22 @@ void watchjobs(int which) {
 
     state = jobs[j].state;
     if (state == which || which == ALL) {
-      msg("[%d] ", j);
       statusp = exitcode(&jobs[j]);
       if (state == RUNNING) {
         if (statusp != -1 && WIFCONTINUED(statusp)) {
-          msg("continue '%s'\n", jobcmd(j));
+          msg("[%d] continue '%s'\n", j, jobcmd(j));
         } else {
-          msg("running '%s'\n", jobcmd(j));
+          msg("[%d] running '%s'\n", j, jobcmd(j));
+          jobs[j].proc[jobs[j].nproc - 1].exitcode = -1;
         }
-      } else if (state == STOPPED) {
-        msg("suspended '%s'\n", jobcmd(j));
-      } else {
+      } else if (state == STOPPED && statusp != -1) {
+        msg("[%d] suspended '%s'\n", j, jobcmd(j));
+        jobs[j].proc[jobs[j].nproc - 1].exitcode = -1;
+      } else if (state == FINISHED) {
         if (WIFEXITED(statusp)) {
-          msg("exited '%s', status=%d\n", jobcmd(j), WEXITSTATUS(statusp));
+          msg("[%d] exited '%s', status=%d\n", j, jobcmd(j), WEXITSTATUS(statusp));
         } else if (WIFSIGNALED(statusp)) {
-          msg("killed '%s' by signal %d\n", jobcmd(j), WTERMSIG(statusp));
+          msg("[%d] killed '%s' by signal %d\n", j, jobcmd(j), WTERMSIG(statusp));
         }
         deljob(&jobs[j]);
       }
@@ -270,33 +265,42 @@ void watchjobs(int which) {
 int monitorjob(sigset_t *mask) {
   int status, state;
 
-/* TODO: Following code requires use of Tcsetpgrp of tty_fd. */
-  status = -1;
-  struct termios ots;
-  // save old terminal parameters, because processes like vim changes them
-  tcgetattr(tty_fd, &ots);
-
-  Tcsetpgrp(tty_fd, jobs[FG].pgid);
+  /* TODO: Following code requires use of Tcsetpgrp of tty_fd. */
   sigset_t old_mask;
+  status = -1;
+  Tcgetattr(tty_fd, &jobs[FG].tmodes);
+  Tcsetpgrp(tty_fd, jobs[FG].pgid);
+
   Sigprocmask(SIG_SETMASK, mask, &old_mask);
+
+// if condition of while is true then we now that there is a race
+// and we have to continue stopped job
+// particulary: while was added to handle vim command 
+// (because vim send to itself sigtstp when it is a background job
+// and nearly every time race occured)
+  while (jobs[FG].state == STOPPED) {
+    Kill(-jobs[FG].pgid, SIGCONT);
+    Sigsuspend(mask);
+  }
+
   while ((state = jobs[FG].state) == RUNNING) {
     Sigsuspend(mask);
   }
 
   state = jobs[FG].state;
   Sigprocmask(SIG_SETMASK, &old_mask, NULL);
+
   if (state == STOPPED) {
     Tcsetpgrp(tty_fd, getpgrp());
-    tcsetattr(tty_fd, TCSADRAIN, &ots);
+    Tcsetattr(tty_fd, 0, &shell_tmodes);
     int j = allocjob();
-    jobs[j].pgid = 0;
     jobs[j].state = STOPPED;
     movejob(FG, j);
     watchjobs(STOPPED);
   } else if (state == FINISHED) {
     Tcsetpgrp(tty_fd, getpgrp());
     //restore terminal parameters 
-    tcsetattr(tty_fd, TCSADRAIN, &ots);
+    Tcsetattr(tty_fd, 0, &shell_tmodes);
     status = exitcode(&jobs[FG]);
     watchjobs(FINISHED);
     deljob(&jobs[FG]);
@@ -309,20 +313,25 @@ int monitorjob(sigset_t *mask) {
 void initjobs(void) {
   Signal(SIGCHLD, sigchld_handler);
   jobs = calloc(sizeof(job_t), 1);
-  
+
   /* Assume we're running in interactive mode, so move us to foreground.
    * Duplicate terminal fd, but do not leak it to subprocesses that execve. */
   assert(isatty(STDIN_FILENO));
   tty_fd = Dup(STDIN_FILENO);
-  fcntl(tty_fd, F_SETFL, O_CLOEXEC);
+  fcntl(tty_fd, F_SETFD, FD_CLOEXEC);
+
+  /* Take control of the terminal. */
   Tcsetpgrp(tty_fd, getpgrp());
+
+  /* Save default terminal attributes for the shell. */
+  Tcgetattr(tty_fd, &shell_tmodes);
 }
 
 /* Called just before the shell finishes. */
 void shutdownjobs(void) {
   sigset_t mask;
   Sigprocmask(SIG_BLOCK, &sigchld_mask, &mask);
-  
+
   /* TODO: Kill remaining jobs and wait for them to finish. */
   for (int j = BG; j < njobmax; ++j) {
     if (jobs[j].state != FINISHED) {
@@ -331,6 +340,7 @@ void shutdownjobs(void) {
   }
 
   watchjobs(FINISHED);
+
   Sigprocmask(SIG_SETMASK, &mask, NULL);
 
   Close(tty_fd);

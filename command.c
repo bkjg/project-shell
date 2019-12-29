@@ -114,7 +114,7 @@ noreturn void external_command(char **argv) {
     /* TODO: For all paths in PATH construct an absolute path and execve it. */
     char* command;
     int pos;
-    while (pos = strcspn(path, ":")) {
+    while ((pos = strcspn(path, ":")) > 0) {
       command = strndup(path, pos);
       strapp(&command, "/");
       strapp(&command, argv[0]);
