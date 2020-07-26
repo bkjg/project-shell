@@ -1,3 +1,5 @@
+#include <stdio.h>
+#include <glob.h>
 #include <readline/readline.h>
 #include <readline/history.h>
 
@@ -28,7 +30,7 @@ static int do_redir(token_t *token, int ntokens, int *inputp, int *outputp) {
   int n = 0;           /* number of tokens after redirections are removed */
 
   for (int i = 0; i < ntokens; i++) {
-    /* TODO: Handle tokens and open files as requested. */
+    /* Handle tokens and open files as requested. */
      mode = token[i];
     if (separator_p(mode)) {
       token[n] = token[i];
@@ -37,7 +39,16 @@ static int do_redir(token_t *token, int ntokens, int *inputp, int *outputp) {
       token[n] = token[i];
       n++;
     } else {
+      /* if there are more than one mathing file name, choose the first one */
       assert(i + 1 < ntokens);
+      glob_t globbuf;
+      globbuf.gl_offs = 0;
+      glob(token[i+1], GLOB_DOOFFS , NULL, &globbuf);
+
+      if (globbuf.gl_pathc > 0) {
+        strcpy(token[i + 1], globbuf.gl_pathv[0]);
+      }
+
       if (mode == T_INPUT) {
         *inputp = open(token[i + 1], O_RDONLY, 0);
         i++;
@@ -129,7 +140,7 @@ static pid_t do_stage(pid_t pgid, sigset_t *mask, int input, int output,
   if (ntokens == 0)
     app_error("ERROR: Command line is not well formed!");
 
-  /* TODO: Start a subprocess and make sure it's moved to a process group. */
+  /* Start a subprocess and make sure it's moved to a process group. */
   pid_t pid = Fork();
 
   if (pid == 0) {
@@ -179,8 +190,7 @@ static int do_pipeline(token_t *token, int ntokens, bool bg) {
   sigset_t mask;
   Sigprocmask(SIG_BLOCK, &sigchld_mask, &mask);
 
-  /* TODO: Start pipeline subprocesses, create a job and monitor it.
-   * Remember to close unused pipe ends! */
+  /* Start pipeline subprocesses, create a job and monitor it. */
   size_t size = 0;  
 
   for (int i = 0; i < ntokens; ++i) {
@@ -196,7 +206,6 @@ static int do_pipeline(token_t *token, int ntokens, bool bg) {
   job = addjob(pgid, bg);
   addproc(job, pgid, token);
 
-  //Sigprocmask(SIG_BLOCK, &sigchld_mask, &mask);
   int next_output = -1;
   for (int i = size + 1; i < ntokens; ++i) {
     if (token[i] == T_PIPE) {
@@ -265,11 +274,11 @@ static void eval(char *cmdline) {
   free(token);
 }
 
-// set the line to the name of directory, replace name of home directory by '~'
+/* set the line to the name of directory, replace name of home directory by '~' */
 void set_line (char* buf) {
   const char *homedir = getenv("HOME");
 
-  char* ptr = getcwd(buf, MAXLINE);
+  char *ptr = getcwd(buf, MAXLINE);
 
   if (ptr == NULL) {
     buf[0] = '#';
@@ -278,7 +287,7 @@ void set_line (char* buf) {
     return;
   }
 
-  char* pos;
+  char *pos;
   if ((pos = strstr(buf, homedir)) != NULL) {
     strcpy(buf + 1, pos + strlen(homedir));
     buf[0] = '~';
@@ -290,7 +299,7 @@ void set_line (char* buf) {
   buf[length + 1] = ' ';
 }
 
-void find_bang (char* line) {
+void find_bang (char *line) {
   char *expansion;
   int pos;
   if ((pos = strcspn(line, "!")) >= 0 && pos < strlen(line)) {
@@ -311,7 +320,7 @@ void find_bang (char* line) {
 int main(int argc, char *argv[]) {
   rl_initialize();
 
-  //read history from ~/.history
+  /* read history from ~/.history */
   read_history(NULL);
 
   sigemptyset(&sigchld_mask);
@@ -331,8 +340,9 @@ int main(int argc, char *argv[]) {
 
   while (true) {
     if (!sigsetjmp(loop_env, 1)) {
+      /* set the prompt to the current working directory name */
       set_line(buf);
-      //line = readline("# ");
+      /* get line from user */
       line = readline(buf);
     } else {
       msg("\n");
@@ -343,7 +353,7 @@ int main(int argc, char *argv[]) {
       break;
 
     if (strlen(line)) {
-      // check if bang exist in command
+      /* check if bang exist in command */
       find_bang(line); 
       add_history(line);
       eval(line);
@@ -352,7 +362,7 @@ int main(int argc, char *argv[]) {
     free(line);
     watchjobs(FINISHED);
 
-    //save history to ~/.history
+    /* save history to ~/.history */
     write_history(NULL);
   }
 

@@ -82,9 +82,11 @@ static int exitcode(job_t *job) {
 
 static int allocjob(void) {
   /* Find empty slot for background job. */
-  for (int j = BG; j < njobmax; j++)
-    if (jobs[j].pgid == 0)
+  for (int j = BG; j < njobmax; j++) {
+    if (jobs[j].pgid == 0) {
       return j;
+    }
+  }
 
   /* If none found, allocate new one. */
   jobs = realloc(jobs, sizeof(job_t) * (njobmax + 1));
@@ -109,7 +111,7 @@ int addjob(pid_t pgid, int bg) {
   job->nproc = 0;
   job->tmodes = shell_tmodes;
 
-// added reporting about starting process in background
+  /* Report starting process in background */
   if (bg) {
     msg("[%d] %d\n", j, pgid);
   }
@@ -182,8 +184,9 @@ char *jobcmd(int j) {
  * then move the job to foreground and start monitoring it. */
 bool resumejob(int j, int bg, sigset_t *mask) {
   if (j < 0) {
-    for (j = njobmax - 1; j > 0 && jobs[j].state == FINISHED; j--)
+    for (j = njobmax - 1; j > 0 && jobs[j].state == FINISHED; j--) {
       continue;
+    }
   }
 
   if (j >= njobmax || jobs[j].state == FINISHED)
@@ -191,8 +194,8 @@ bool resumejob(int j, int bg, sigset_t *mask) {
 
   /* TODO: Continue stopped job. Possibly move job to foreground slot. */
   if (jobs[j].state == STOPPED) {
-// while loop was added to make sure that process received sigcont
-// particulary: vim 
+/* while loop was added to make sure that process received sigcont
+   particularly: vim  */
     while (jobs[j].state != RUNNING) {
       Kill(-jobs[j].pgid, SIGCONT);
       Sigsuspend(mask);
@@ -212,8 +215,9 @@ bool resumejob(int j, int bg, sigset_t *mask) {
 
 /* Kill the job by sending it a SIGTERM. */
 bool killjob(int j) {
-  if (j >= njobmax || jobs[j].state == FINISHED)
+  if (j >= njobmax || jobs[j].state == FINISHED) {
     return false;
+  }
   debug("[%d] killing '%s'\n", j, jobs[j].command);
 
   /* TODO: I love the smell of napalm in the morning. */
@@ -229,8 +233,9 @@ bool killjob(int j) {
 /* Report state of requested background jobs. Clean up finished jobs. */
 void watchjobs(int which) {
   for (int j = BG; j < njobmax; j++) {
-    if (jobs[j].pgid == 0)
+    if (jobs[j].pgid == 0) {
       continue;
+    }
 
     /* TODO: Report job number, state, command and exit code or signal. */
     int statusp;
@@ -274,11 +279,11 @@ int monitorjob(sigset_t *mask) {
 
   Sigprocmask(SIG_SETMASK, mask, &old_mask);
 
-// if condition of while is true then we now that there is a race
-// and we have to continue stopped job
-// particulary: while was added to handle vim command 
-// (because vim send to itself sigtstp when it is a background job
-// and nearly every time race occured)
+/* if condition of while is true then we now that there is a race
+   and we have to continue stopped job
+   particularly: while was added to handle vim command
+   (because vim send to itself sigtstp when it is a background job
+   and nearly every time race occurred) */
   while (jobs[FG].state == STOPPED) {
     Kill(-jobs[FG].pgid, SIGCONT);
     Sigsuspend(mask);
@@ -300,7 +305,7 @@ int monitorjob(sigset_t *mask) {
     watchjobs(STOPPED);
   } else if (state == FINISHED) {
     Tcsetpgrp(tty_fd, getpgrp());
-    //restore terminal parameters 
+    /* restore terminal parameters */
     Tcsetattr(tty_fd, 0, &shell_tmodes);
     status = exitcode(&jobs[FG]);
     watchjobs(FINISHED);
